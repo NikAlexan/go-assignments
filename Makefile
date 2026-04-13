@@ -1,7 +1,7 @@
 include .env
 export
 
-.PHONY: run stop build restart logs logs-order logs-payment ps clean tidy help
+.PHONY: run stop build restart logs logs-order logs-payment ps clean tidy stream help
 
 ## run: Start all services (build images if not present)
 run:
@@ -38,10 +38,19 @@ ps:
 clean:
 	docker compose down -v
 
-## tidy: Run go mod tidy in both services via Docker
+## tidy: Run go mod tidy in all modules via Docker
 tidy:
-	docker run --rm -v "$(CURDIR)/order-service":/app -w /app golang:1.26-alpine go mod tidy
-	docker run --rm -v "$(CURDIR)/payment-service":/app -w /app golang:1.26-alpine go mod tidy
+	docker run --rm -v "$(CURDIR)/order-service":/app -v "$(CURDIR)/proto-gen":/proto-gen -w /app golang:1.26-alpine go mod tidy
+	docker run --rm -v "$(CURDIR)/payment-service":/app -v "$(CURDIR)/proto-gen":/proto-gen -w /app golang:1.26-alpine go mod tidy
+	docker run --rm -v "$(CURDIR)/streaming-client":/app -v "$(CURDIR)/proto-gen":/proto-gen -w /app golang:1.26-alpine go mod tidy
+
+## stream: Subscribe to order status updates via gRPC streaming. Usage: make stream ORDER_ID=<id>
+stream:
+	@test -n "$(ORDER_ID)" || (echo "Usage: make stream ORDER_ID=<order-id>" && exit 1)
+	docker run --rm --network host \
+	  -v "$(CURDIR)/streaming-client":/app \
+	  -w /app golang:1.26-alpine \
+	  go run main.go $(ORDER_ID)
 
 ## help: Show this help
 help:

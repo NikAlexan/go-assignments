@@ -1,107 +1,81 @@
-# AP2 Assignment 1 - Clean Architecture Microservices (Order & Payment)
+# AP2 Assignment 2 - gRPC Migration (Order & Payment Microservices)
 
 **Student:** Nikita Vassilenko, SE-2410
 
 ---
 
-## Architecture Diagram
+## What changed in Assignment 2
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                          Client (curl / Postman)                │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │ HTTP REST
-                                |
-┌───────────────────────────────────────────────────┐
-│              Order Service  :8080                 │
-│                                                   │
-│  Transport (Gin handlers)                         │
-│       │                                           │
-│  Use Case (business logic, state transitions)     │
-│       │                          │                │
-│  OrderRepository            PaymentClient         │
-│  (interface)                (interface)           │
-│       │                          │                │
-│  PostgresOrderRepo     PaymentHTTPClient          │
-└───────┬──────────────────────────┬────────────────┘
-        │                          │ HTTP POST /payments
-        |                          |
-  ┌──────────┐        ┌────────────────────────────────┐
-  │ orders_db│        │     Payment Service  :8081     │
-  │(Postgres)│        │                                │
-  └──────────┘        │  Transport (Gin handlers)      │
-                      │       │                        │
-                      │  Use Case (auth + limit check) │
-                      │       │                        │
-                      │  PaymentRepository (interface) │
-                      │       │                        │
-                      │  PostgresPaymentRepo           │
-                      └───────┬────────────────────────┘
-                              │
-                        ┌─────────────┐
-                        │ payments_db │
-                        │  (Postgres) │
-                        └─────────────┘
-```
+| # | Change |
+|---|--------|
+| 1 | Order→Payment communication migrated from **HTTP REST** to **gRPC** |
+| 2 | Payment Service exposes a **gRPC server** (`ProcessPayment` RPC) |
+| 3 | Order Service exposes a **gRPC server** (`SubscribeToOrderUpdates` — server-side streaming) |
+| 4 | **Unary interceptor** on Payment Service logs method name + duration |
+| 5 | Proto files live in a dedicated GitHub repo; generated `.pb.go` files are produced by GitHub Actions CI |
+
+### Proto & Generated Code Repos
+- **Protos** (`.proto` files): https://github.com/NikAlexan/go-protos
+- **Generated** (`.pb.go` files): https://github.com/NikAlexan/go-proto-gen
 
 ---
 
-## Bounded Contexts
-
-| Context         | Owns                              | Database     |
-|-----------------|-----------------------------------|--------------|
-| Order Service   | Orders, their state, idempotency  | `orders_db`  |
-| Payment Service | Payments, transaction IDs, limits | `payments_db`|
-
-Each service has its own internal domain model. There is **no shared code** or common package between services.
-
----
-
-## Clean Architecture Layers (per service)
+## Architecture
 
 ```
-internal/
-├── domain/       <- Pure Go structs + domain errors. No framework deps.
-├── usecase/      <- Business logic. Depends on interfaces (ports) only.
-├── repository/   <- Implements ports. Talks to PostgreSQL / HTTP.
-└── transport/http/<- Thin Gin handlers. Parses requests, calls use cases.
-cmd/<service>/main.go <- Composition Root. Manual DI, no magic.
+┌──────────────────────────────────────────────────────────────────┐
+│                     Client (curl / Postman)                      │
+└─────────────────────────────┬────────────────────────────────────┘
+                              │ HTTP REST
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                  Order Service  :8080 (HTTP) | :50052 (gRPC)        │
+│                                                                     │
+│  transport/http  ← Gin REST handlers (external API, unchanged)      │
+│  transport/grpc  ← OrderServiceServer: SubscribeToOrderUpdates()    │
+│       │                          │                                  │
+│  OrderUseCase               PaymentGRPCClient                       │
+│       │                          │ gRPC (ProcessPayment)            │
+│  PostgresOrderRepo               ▼                                  │
+└───────┬──────────────────────────────────────────────────────────┘  │
+        │                  ┌───────────────────────────────────────┐  │
+  ┌──────────┐             │  Payment Service  :8081 (HTTP) | :50051 (gRPC) │
+  │ orders_db│             │                                       │
+  │(Postgres)│             │  transport/grpc ← PaymentServiceServer│
+  └──────────┘             │    + LoggingInterceptor (bonus)       │
+                           │  transport/http ← kept for reference  │
+                           │  PaymentUseCase (unchanged)           │
+                           │  PostgresPaymentRepo                  │
+                           └───────────────┬───────────────────────┘
+                                           │
+                                     ┌─────────────┐
+                                     │ payments_db │
+                                     │  (Postgres) │
+                                     └─────────────┘
 ```
 
 ---
 
-## Failure Handling
+## gRPC Services
 
-**Scenario:** Payment Service is unavailable (down / timeout).
+### PaymentService (`payment/payment.proto`)
+| RPC | Type | Description |
+|-----|------|-------------|
+| `ProcessPayment` | Unary | Authorizes a payment; returns `Authorized`/`Declined` + transaction ID |
 
-**Decision:** Order is marked **`Failed`** (not left as `Pending`).
-
-**Rationale:**  
-
-- `Pending` is ambiguous – the client can't tell if the order is still being processed or stuck.  
-- `Failed` is explicit: the client knows to retry (using a new `Idempotency-Key`).  
-- The Order Service returns **HTTP 503 Service Unavailable** to the caller, along with the failed order data.  
-- The `http.Client` in Order Service has a **2-second timeout**, so it never hangs.
-
----
-
-## Business Rules
-
-| Rule          | Detail                                                                |
-|---------------|-----------------------------------------------------------------------|
-| Amount type   | `int64` (cents). Float64 is forbidden for money.                      |
-| Amount > 0    | Validated in Order use case.                                          |
-| Payment limit | Amount > 100 000 cents ($1000) -> Payment Service returns `Declined`. |
-| Cancel rule   | Only `Pending` orders can be cancelled. `Paid` orders return 409.     |
-| Timeout       | HTTP client for inter-service calls has a 2-second timeout.           |
+### OrderService (`order/order.proto`)
+| RPC | Type | Description |
+|-----|------|-------------|
+| `SubscribeToOrderUpdates` | Server-side streaming | Streams status changes for an order until terminal state |
 
 ---
 
-## Idempotency (Bonus)
+## Ports
 
-Send `Idempotency-Key: <uuid>` header with `POST /orders`.  
-If the same key is used again, the existing order is returned without creating a duplicate.  
-The key is stored in `orders.idempotency_key` (UNIQUE constraint).
+| Service | HTTP | gRPC |
+|---------|------|------|
+| Order Service | 8080 | 50052 |
+| Payment Service | 8081 | 50051 |
 
 ---
 
@@ -110,30 +84,23 @@ The key is stored in `orders.idempotency_key` (UNIQUE constraint).
 **Prerequisites:** Docker & Docker Compose.
 
 ```bash
-docker compose up --build
+cp .env.example .env
+make run
 ```
-
-Services start on:
-
-- Order Service -> `http://localhost:8080`
-- Payment Service -> `http://localhost:8081`
-
-Databases are automatically migrated on startup.
 
 ---
 
 ## API Examples
 
-### POST /orders - create order (will be Paid)
+### Create order (Paid — payment authorized over gRPC)
 
 ```bash
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: key-001" \
   -d '{"customer_id":"cust-1","item_name":"Laptop","amount":50000}'
 ```
 
-### POST /orders - create order (will be Failed, amount > $1000)
+### Create order (Failed — amount > $1000 → Declined)
 
 ```bash
 curl -X POST http://localhost:8080/orders \
@@ -141,20 +108,71 @@ curl -X POST http://localhost:8080/orders \
   -d '{"customer_id":"cust-1","item_name":"Server","amount":150000}'
 ```
 
-### GET /orders/:id - get order
+### Get order
 
 ```bash
 curl http://localhost:8080/orders/<order-id>
 ```
 
-### PATCH /orders/:id/cancel - cancel order
+### Cancel order
 
 ```bash
 curl -X PATCH http://localhost:8080/orders/<order-id>/cancel
 ```
 
-### GET /payments/:order_id - get payment by order
+### Subscribe to order status stream (gRPC)
 
 ```bash
-curl http://localhost:8081/payments/<order-id>
+# In one terminal — subscribe
+cd streaming-client
+go run main.go <order-id>
+
+# In another terminal — trigger a state change
+curl -X PATCH http://localhost:8080/orders/<order-id>/cancel
+```
+
+---
+
+## Clean Architecture Layers (per service)
+
+```
+internal/
+├── domain/          <- Pure Go structs + domain errors. No framework deps.
+├── usecase/         <- Business logic. Depends on interfaces only.
+├── repository/      <- Implements ports. Talks to PostgreSQL / gRPC.
+├── transport/http/  <- Gin handlers (external REST API).
+└── transport/grpc/  <- gRPC server + interceptor.
+cmd/<service>/main.go <- Composition Root. Manual DI, no magic.
+```
+
+---
+
+## Business Rules
+
+| Rule | Detail |
+|------|--------|
+| Amount type | `int64` (cents). Float64 is forbidden for money. |
+| Amount > 0 | Validated in Order use case. |
+| Payment limit | Amount > 100 000 cents ($1000) → `Declined`. |
+| Cancel rule | Only `Pending` orders can be cancelled. |
+| gRPC timeout | Order Service uses `context.WithTimeout(2s)` when calling Payment Service. |
+
+---
+
+## Evidences
+
+### gRPC call — POST /orders → Payment authorized via gRPC (status: Paid)
+![gRPC call](docs/screenshots/img.png)
+
+### Server-side streaming — SubscribeToOrderUpdates
+![Streaming](docs/screenshots/img_1.png)
+
+---
+
+## Bonus: gRPC Interceptor
+
+Payment Service has a unary server interceptor that logs every RPC call:
+
+```
+[gRPC] method=/payment.PaymentService/ProcessPayment duration=1.92ms err=<nil>
 ```

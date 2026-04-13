@@ -36,8 +36,10 @@ services:
     environment:
       DATABASE_URL: postgres://${PAYMENTS_DB_USER}:${PAYMENTS_DB_PASSWORD}@payments-db:5432/${PAYMENTS_DB_NAME}?sslmode=disable
       PORT: ${PAYMENT_SERVICE_PORT}
+      PAYMENT_GRPC_PORT: ${PAYMENT_GRPC_PORT}
     ports:
       - "${PAYMENT_SERVICE_PORT}:${PAYMENT_SERVICE_PORT}"
+      - "${PAYMENT_GRPC_PORT}:${PAYMENT_GRPC_PORT}"
     depends_on:
       payments-db:
         condition: service_healthy
@@ -46,10 +48,12 @@ services:
     build: ./order-service
     environment:
       DATABASE_URL: postgres://${ORDERS_DB_USER}:${ORDERS_DB_PASSWORD}@orders-db:5432/${ORDERS_DB_NAME}?sslmode=disable
-      PAYMENT_SERVICE_URL: http://payment-service:${PAYMENT_SERVICE_PORT}
+      PAYMENT_GRPC_ADDR: payment-service:${PAYMENT_GRPC_PORT}
       PORT: ${ORDER_SERVICE_PORT}
+      ORDER_GRPC_PORT: ${ORDER_GRPC_PORT}
     ports:
       - "${ORDER_SERVICE_PORT}:${ORDER_SERVICE_PORT}"
+      - "${ORDER_GRPC_PORT}:${ORDER_GRPC_PORT}"
     depends_on:
       orders-db:
         condition: service_healthy
