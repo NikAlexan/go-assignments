@@ -1,0 +1,57 @@
+services:
+  orders-db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ${ORDERS_DB_NAME}
+      POSTGRES_USER: ${ORDERS_DB_USER}
+      POSTGRES_PASSWORD: ${ORDERS_DB_PASSWORD}
+    ports:
+      - "${ORDERS_DB_PORT}:5432"
+    volumes:
+      - ./order-service/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ORDERS_DB_USER} -d ${ORDERS_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  payments-db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ${PAYMENTS_DB_NAME}
+      POSTGRES_USER: ${PAYMENTS_DB_USER}
+      POSTGRES_PASSWORD: ${PAYMENTS_DB_PASSWORD}
+    ports:
+      - "${PAYMENTS_DB_PORT}:5432"
+    volumes:
+      - ./payment-service/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PAYMENTS_DB_USER} -d ${PAYMENTS_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  payment-service:
+    build: ./payment-service
+    environment:
+      DATABASE_URL: postgres://${PAYMENTS_DB_USER}:${PAYMENTS_DB_PASSWORD}@payments-db:5432/${PAYMENTS_DB_NAME}?sslmode=disable
+      PORT: ${PAYMENT_SERVICE_PORT}
+    ports:
+      - "${PAYMENT_SERVICE_PORT}:${PAYMENT_SERVICE_PORT}"
+    depends_on:
+      payments-db:
+        condition: service_healthy
+
+  order-service:
+    build: ./order-service
+    environment:
+      DATABASE_URL: postgres://${ORDERS_DB_USER}:${ORDERS_DB_PASSWORD}@orders-db:5432/${ORDERS_DB_NAME}?sslmode=disable
+      PAYMENT_SERVICE_URL: http://payment-service:${PAYMENT_SERVICE_PORT}
+      PORT: ${ORDER_SERVICE_PORT}
+    ports:
+      - "${ORDER_SERVICE_PORT}:${ORDER_SERVICE_PORT}"
+    depends_on:
+      orders-db:
+        condition: service_healthy
+      payment-service:
+        condition: service_started

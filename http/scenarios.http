@@ -1,0 +1,76 @@
+### Full flow: create order -> check status -> get payment
+
+@orderServiceUrl = http://localhost:8080
+@paymentServiceUrl = http://localhost:8081
+
+###
+# Step 1 - Create order (copy "id" from response into @orderId below)
+POST {{orderServiceUrl}}/orders
+Content-Type: application/json
+
+{
+  "customer_id": "cust-scenario",
+  "item_name": "MacBook Pro",
+  "amount": 99999
+}
+
+###
+# Step 2 - Set the returned order ID
+@orderId = 8d047ef5-7bc8-4c4e-9cd2-9261ded51f6a
+
+###
+# Step 3 - Verify order is Paid
+GET {{orderServiceUrl}}/orders/{{orderId}}
+
+###
+# Step 4 - Verify payment is Authorized
+GET {{paymentServiceUrl}}/payments/{{orderId}}
+
+###
+# Step 5 - Try to cancel a Paid order (expect 409)
+PATCH {{orderServiceUrl}}/orders/{{orderId}}/cancel
+
+### ─────────────────────────────────────────────────────────────
+### Idempotency scenario
+### ─────────────────────────────────────────────────────────────
+
+###
+# Request 1 - Create order with idempotency key
+POST {{orderServiceUrl}}/orders
+Content-Type: application/json
+Idempotency-Key: idem-scenario-001
+
+{
+  "customer_id": "cust-idem",
+  "item_name": "iPad",
+  "amount": 80000
+}
+
+###
+# Request 2 - Exact same request (expect same order returned, no duplicate)
+POST {{orderServiceUrl}}/orders
+Content-Type: application/json
+Idempotency-Key: idem-scenario-001
+
+{
+  "customer_id": "cust-idem",
+  "item_name": "iPad",
+  "amount": 80000
+}
+
+### ─────────────────────────────────────────────────────────────
+### Failure scenario: Payment Service unavailable -> 503
+### (stop payment-service container before running this)
+###   docker compose stop payment-service
+### ─────────────────────────────────────────────────────────────
+
+###
+# Order should fail with 503, order.status = "Failed"
+POST {{orderServiceUrl}}/orders
+Content-Type: application/json
+
+{
+  "customer_id": "cust-fail",
+  "item_name": "Widget",
+  "amount": 5000
+}

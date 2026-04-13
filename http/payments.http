@@ -1,0 +1,30 @@
+### Base URL
+@baseUrl = http://localhost:8081
+
+###
+# Authorize payment - should return Authorized
+POST {{baseUrl}}/payments
+Content-Type: application/json
+
+{
+  "order_id": "REPLACE_WITH_ORDER_ID",
+  "amount": 50000
+}
+
+###
+# Authorize payment - should return Declined (amount > 100000)
+POST {{baseUrl}}/payments
+Content-Type: application/json
+
+{
+  "order_id": "REPLACE_WITH_ORDER_ID_2",
+  "amount": 150000
+}
+
+###
+# Get payment by order_id
+GET {{baseUrl}}/payments/REPLACE_WITH_ORDER_ID
+
+###
+# Get payment - not found
+GET {{baseUrl}}/payments/00000000-0000-0000-0000-000000000000

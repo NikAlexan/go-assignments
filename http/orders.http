@@ -1,0 +1,68 @@
+### Base URL
+@baseUrl = http://localhost:8080
+
+###
+# Create order - should be Paid (amount <= $1000)
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+  "customer_id": "cust-1",
+  "item_name": "Laptop",
+  "amount": 50000
+}
+
+###
+# Create order with Idempotency-Key (duplicate request returns same order)
+POST {{baseUrl}}/orders
+Content-Type: application/json
+Idempotency-Key: unique-key-001
+
+{
+  "customer_id": "cust-1",
+  "item_name": "Laptop",
+  "amount": 50000
+}
+
+###
+# Create order - should be Failed (amount > $1000 -> Payment Service declines)
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+  "customer_id": "cust-2",
+  "item_name": "Enterprise Server",
+  "amount": 150000
+}
+
+###
+# Create order - validation error (amount = 0)
+POST {{baseUrl}}/orders
+Content-Type: application/json
+
+{
+  "customer_id": "cust-1",
+  "item_name": "Free Item",
+  "amount": 0
+}
+
+###
+# Get order by ID
+GET {{baseUrl}}/orders/REPLACE_WITH_ORDER_ID
+
+###
+# Get order - not found
+GET {{baseUrl}}/orders/00000000-0000-0000-0000-000000000000
+
+###
+# Cancel a Pending order
+PATCH {{baseUrl}}/orders/REPLACE_WITH_PENDING_ORDER_ID/cancel
+
+###
+# Cancel a Paid order - should return 409 Conflict
+PATCH {{baseUrl}}/orders/REPLACE_WITH_PAID_ORDER_ID/cancel
+
+###
+@status =
+# Get orders by status
+GET {{baseUrl}}/orders?status={{status}}
