@@ -40,9 +40,9 @@ clean:
 
 ## tidy: Run go mod tidy in all modules via Docker
 tidy:
-	docker run --rm -v "$(CURDIR)/order-service":/app -v "$(CURDIR)/proto-gen":/proto-gen -w /app golang:1.26-alpine go mod tidy
-	docker run --rm -v "$(CURDIR)/payment-service":/app -v "$(CURDIR)/proto-gen":/proto-gen -w /app golang:1.26-alpine go mod tidy
-	docker run --rm -v "$(CURDIR)/streaming-client":/app -v "$(CURDIR)/proto-gen":/proto-gen -w /app golang:1.26-alpine go mod tidy
+	docker run --rm -v "$(CURDIR)/order-service":/app -w /app golang:1.26-alpine go mod tidy
+	docker run --rm -v "$(CURDIR)/payment-service":/app -w /app golang:1.26-alpine go mod tidy
+	docker run --rm -v "$(CURDIR)/streaming-client":/app -w /app golang:1.26-alpine go mod tidy
 
 ## stream: Subscribe to order status updates via gRPC streaming. Usage: make stream ORDER_ID=<id>
 stream:
