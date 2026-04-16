@@ -41,3 +41,7 @@ func (useCase *PaymentUseCase) Authorize(ctx context.Context, orderID string, am
 func (useCase *PaymentUseCase) GetByOrderID(ctx context.Context, orderID string) (*domain.Payment, error) {
 	return useCase.repository.FindByOrderID(ctx, orderID)
 }
+
+func (useCase *PaymentUseCase) GetStats(ctx context.Context) (*domain.PaymentStats, error) {
+	return useCase.repository.GetStats(ctx)
+}

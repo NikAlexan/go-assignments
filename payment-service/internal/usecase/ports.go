@@ -8,4 +8,5 @@ import (
 type PaymentRepository interface {
 	Save(ctx context.Context, payment *domain.Payment) error
 	FindByOrderID(ctx context.Context, orderID string) (*domain.Payment, error)
+	GetStats(ctx context.Context) (*domain.PaymentStats, error)
 }
