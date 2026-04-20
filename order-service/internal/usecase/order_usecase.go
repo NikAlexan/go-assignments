@@ -89,6 +89,10 @@ func (useCase *OrderUseCase) GetOrdersByStatus(ctx context.Context, status strin
 	return useCase.repository.FindByStatus(ctx, status)
 }
 
+func (useCase *OrderUseCase) GetPaymentStats(ctx context.Context) (*PaymentStats, error) {
+	return useCase.paymentClient.GetPaymentStats(ctx)
+}
+
 func (useCase *OrderUseCase) CancelOrder(ctx context.Context, id string) (*domain.Order, error) {
 	order, err := useCase.repository.FindByID(ctx, id)
 	if err != nil {

@@ -8,5 +8,6 @@ func SetupRouter(handler *Handler) *gin.Engine {
 	router.GET("/orders", handler.GetOrdersByStatus)
 	router.GET("/orders/:id", handler.GetOrder)
 	router.PATCH("/orders/:id/cancel", handler.CancelOrder)
+	router.GET("/payments/stats", handler.GetPaymentStats)
 	return router
 }

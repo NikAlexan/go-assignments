@@ -9,7 +9,7 @@ Content-Type: application/json
 {
   "customer_id": "cust-1",
   "item_name": "Laptop",
-  "amount": 50000
+  "amount": 1005000
 }
 
 ###
@@ -66,3 +66,7 @@ PATCH {{baseUrl}}/orders/REPLACE_WITH_PAID_ORDER_ID/cancel
 @status =
 # Get orders by status
 GET {{baseUrl}}/orders?status={{status}}
+
+###
+# Get payment stats (via Order Service → Payment Service gRPC)
+GET {{baseUrl}}/payments/stats

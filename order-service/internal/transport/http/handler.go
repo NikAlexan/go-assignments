@@ -16,6 +16,7 @@ type orderUseCase interface {
 	GetOrder(ctx context.Context, id string) (*domain.Order, error)
 	CancelOrder(ctx context.Context, id string) (*domain.Order, error)
 	GetOrdersByStatus(ctx context.Context, status string) ([]*domain.Order, error)
+	GetPaymentStats(ctx context.Context) (*usecase.PaymentStats, error)
 }
 
 type Handler struct {
@@ -103,6 +104,20 @@ func (handler *Handler) CancelOrder(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, orderResponse(order))
+}
+
+func (handler *Handler) GetPaymentStats(c *gin.Context) {
+	stats, err := handler.useCase.GetPaymentStats(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"total_count":      stats.TotalCount,
+		"authorized_count": stats.AuthorizedCount,
+		"declined_count":   stats.DeclinedCount,
+		"total_amount":     stats.TotalAmount,
+	})
 }
 
 var validStatuses = map[string]bool{

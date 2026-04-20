@@ -13,8 +13,16 @@ type OrderRepository interface {
 	FindByStatus(ctx context.Context, status string) ([]*domain.Order, error)
 }
 
+type PaymentStats struct {
+	TotalCount      int64
+	AuthorizedCount int64
+	DeclinedCount   int64
+	TotalAmount     int64
+}
+
 type PaymentClient interface {
 	// Authorize calls the Payment Service and returns the payment status ("Authorized" | "Declined")
 	// or an error if the service is unreachable.
 	Authorize(ctx context.Context, orderID string, amount int64) (string, error)
+	GetPaymentStats(ctx context.Context) (*PaymentStats, error)
 }
