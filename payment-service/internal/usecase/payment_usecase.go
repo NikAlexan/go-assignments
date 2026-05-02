@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"log"
 	"payment-service/internal/domain"
 
 	"github.com/google/uuid"
@@ -11,10 +12,11 @@ const maxAmount int64 = 100000 // $1000.00 in cents
 
 type PaymentUseCase struct {
 	repository PaymentRepository
+	publisher  EventPublisher
 }
 
-func NewPaymentUseCase(repository PaymentRepository) *PaymentUseCase {
-	return &PaymentUseCase{repository: repository}
+func NewPaymentUseCase(repository PaymentRepository, publisher EventPublisher) *PaymentUseCase {
+	return &PaymentUseCase{repository: repository, publisher: publisher}
 }
 
 func (useCase *PaymentUseCase) Authorize(ctx context.Context, orderID string, amount int64) (*domain.Payment, error) {
@@ -35,6 +37,18 @@ func (useCase *PaymentUseCase) Authorize(ctx context.Context, orderID string, am
 	if err := useCase.repository.Save(ctx, payment); err != nil {
 		return nil, err
 	}
+
+	event := PaymentEvent{
+		EventID:       uuid.NewString(),
+		OrderID:       payment.OrderID,
+		Amount:        payment.Amount,
+		CustomerEmail: "user@example.com",
+		Status:        payment.Status,
+	}
+	if err := useCase.publisher.Publish(ctx, event); err != nil {
+		log.Printf("publish payment event: %v", err)
+	}
+
 	return payment, nil
 }
 

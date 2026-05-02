@@ -31,17 +31,39 @@ services:
       timeout: 5s
       retries: 5
 
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
   payment-service:
     build: ./payment-service
     environment:
       DATABASE_URL: postgres://${PAYMENTS_DB_USER}:${PAYMENTS_DB_PASSWORD}@payments-db:5432/${PAYMENTS_DB_NAME}?sslmode=disable
       PORT: ${PAYMENT_SERVICE_PORT}
       PAYMENT_GRPC_PORT: ${PAYMENT_GRPC_PORT}
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     ports:
       - "${PAYMENT_SERVICE_PORT}:${PAYMENT_SERVICE_PORT}"
       - "${PAYMENT_GRPC_PORT}:${PAYMENT_GRPC_PORT}"
     depends_on:
       payments-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  notification-service:
+    build: ./notification-service
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      rabbitmq:
         condition: service_healthy
 
   order-service:

@@ -1,4 +1,4 @@
-# AP2 Assignment 2 - gRPC Migration (Order & Payment Microservices)
+# AP2 Assignment 3 - Event-Driven Architecture (Order, Payment & Notification Microservices)
 
 **Student:** Nikita Vassilenko, SE-2410
 
@@ -176,3 +176,83 @@ Payment Service has a unary server interceptor that logs every RPC call:
 ```
 [gRPC] method=/payment.PaymentService/ProcessPayment duration=1.92ms err=<nil>
 ```
+
+---
+
+## Assignment 3: Event-Driven Architecture
+
+### What changed
+
+| # | Change |
+|---|--------|
+| 1 | Payment Service publishes a `PaymentEvent` to RabbitMQ after every successful payment |
+| 2 | New **Notification Service** consumes events and logs a simulated email |
+| 3 | **Manual ACKs** — message is acknowledged only after successful processing |
+| 4 | **Durable queues** — messages survive a broker restart |
+| 5 | **Idempotency** — duplicate events are silently skipped using an in-memory seen-ID store |
+| 6 | **Dead Letter Queue (DLQ)** — messages that fail 3 times are routed to `payment.completed.dlq` |
+| 7 | **Graceful Shutdown** — both Payment and Notification services use `os/signal` |
+
+### Updated Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Client (curl / Postman)                         │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ HTTP REST
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│               Order Service  :8080 (HTTP) | :50052 (gRPC)        │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │ gRPC (ProcessPayment)
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│             Payment Service  :8081 (HTTP) | :50051 (gRPC)        │
+│                         ↓ after DB save                          │
+│               publish JSON event to RabbitMQ                     │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │ AMQP — queue: payment.completed
+                               ▼
+                    ┌─────────────────────┐
+                    │      RabbitMQ       │
+                    │  (durable queue)    │
+                    └──────────┬──────────┘
+                               │
+               ┌───────────────┴───────────────────┐
+               ▼                                   ▼
+  ┌─────────────────────────┐       ┌──────────────────────────┐
+  │  Notification Service   │       │  DLQ: payment.completed  │
+  │  logs simulated email   │       │  .dlq  (after 3 retries) │
+  └─────────────────────────┘       └──────────────────────────┘
+```
+
+### Idempotency Strategy
+
+Each published event carries a unique `event_id` (UUID generated at publish time).
+The Notification Service maintains a `sync.RWMutex`-protected `map[string]bool` in memory.
+Before processing, it checks `store.Seen(event.EventID)`. If the ID was already processed, the
+message is ACKed immediately without printing the notification log. After successful processing,
+`store.Mark(event.EventID)` is called to record the ID.
+
+> Trade-off: the in-memory store is reset on service restart, so duplicates across restarts
+> will be re-processed. For production use, replace with a Redis SET or a DB-backed seen-IDs table.
+
+### ACK Logic
+
+- `autoAck` is disabled on the consumer channel.
+- Happy path: message processed → `msg.Ack(false)`.
+- Duplicate: event already seen → `msg.Ack(false)` (consume without logging).
+- Transient failure (< 3 retries): `msg.Nack(false, true)` — requeue for retry.
+- Permanent failure (≥ 3 retries): `msg.Nack(false, false)` — no requeue, RabbitMQ routes to DLQ.
+
+### RabbitMQ Management UI
+
+Available at `http://localhost:15672` (guest / guest) when running via Docker Compose.
+
+### Ports
+
+| Service | HTTP | gRPC | Notes |
+|---------|------|------|-------|
+| Order Service | 8080 | 50052 | |
+| Payment Service | 8081 | 50051 | |
+| RabbitMQ | — | — | AMQP: 5672, UI: 15672 |
