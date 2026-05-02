@@ -11,12 +11,16 @@ import (
 const maxAmount int64 = 100000 // $1000.00 in cents
 
 type PaymentUseCase struct {
-	repository PaymentRepository
-	publisher  EventPublisher
+	repository    PaymentRepository
+	publisher     EventPublisher
+	defaultEmail  string
 }
 
-func NewPaymentUseCase(repository PaymentRepository, publisher EventPublisher) *PaymentUseCase {
-	return &PaymentUseCase{repository: repository, publisher: publisher}
+func NewPaymentUseCase(repository PaymentRepository, publisher EventPublisher, defaultEmail string) *PaymentUseCase {
+	if defaultEmail == "" {
+		defaultEmail = "user@example.com"
+	}
+	return &PaymentUseCase{repository: repository, publisher: publisher, defaultEmail: defaultEmail}
 }
 
 func (useCase *PaymentUseCase) Authorize(ctx context.Context, orderID string, amount int64) (*domain.Payment, error) {
@@ -42,7 +46,7 @@ func (useCase *PaymentUseCase) Authorize(ctx context.Context, orderID string, am
 		EventID:       uuid.NewString(),
 		OrderID:       payment.OrderID,
 		Amount:        payment.Amount,
-		CustomerEmail: "user@example.com",
+		CustomerEmail: useCase.defaultEmail,
 		Status:        payment.Status,
 	}
 	if err := useCase.publisher.Publish(ctx, event); err != nil {

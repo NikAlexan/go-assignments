@@ -49,6 +49,7 @@ services:
       PORT: ${PAYMENT_SERVICE_PORT}
       PAYMENT_GRPC_PORT: ${PAYMENT_GRPC_PORT}
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      DEFAULT_CUSTOMER_EMAIL: ${DEFAULT_CUSTOMER_EMAIL}
     ports:
       - "${PAYMENT_SERVICE_PORT}:${PAYMENT_SERVICE_PORT}"
       - "${PAYMENT_GRPC_PORT}:${PAYMENT_GRPC_PORT}"
@@ -62,6 +63,8 @@ services:
     build: ./notification-service
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      SMTP_FROM: ${SMTP_FROM}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
     depends_on:
       rabbitmq:
         condition: service_healthy

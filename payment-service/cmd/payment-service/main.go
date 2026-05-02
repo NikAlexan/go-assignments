@@ -56,7 +56,7 @@ func main() {
 
 	// Composition Root
 	paymentRepository := repository.NewPostgresPaymentRepo(database)
-	paymentUseCase := usecase.NewPaymentUseCase(paymentRepository, publisher)
+	paymentUseCase := usecase.NewPaymentUseCase(paymentRepository, publisher, os.Getenv("DEFAULT_CUSTOMER_EMAIL"))
 
 	// gRPC Server
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(transportgrpc.LoggingInterceptor))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"notification-service/internal/email"
 	"notification-service/internal/idempotency"
 	"notification-service/internal/messaging"
 	"os"
@@ -15,9 +16,14 @@ func main() {
 		log.Fatal("RABBITMQ_URL is required")
 	}
 
+	mailer := email.NewSender(os.Getenv("SMTP_FROM"), os.Getenv("SMTP_PASSWORD"))
+	if mailer == nil {
+		log.Println("notification-service: SMTP not configured, email sending disabled")
+	}
+
 	store := idempotency.NewStore()
 
-	consumer, err := messaging.NewConsumer(rabbitmqURL, store)
+	consumer, err := messaging.NewConsumer(rabbitmqURL, store, mailer)
 	if err != nil {
 		log.Fatalf("create consumer: %v", err)
 	}
