@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"notification-service/internal/domain"
+	"notification-service/internal/email"
 	"notification-service/internal/idempotency"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -23,9 +24,10 @@ type Consumer struct {
 	channel *amqp.Channel
 	store   *idempotency.Store
 	retries map[string]int
+	mailer  *email.Sender
 }
 
-func NewConsumer(url string, store *idempotency.Store) (*Consumer, error) {
+func NewConsumer(url string, store *idempotency.Store, mailer *email.Sender) (*Consumer, error) {
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("dial rabbitmq: %w", err)
@@ -50,7 +52,7 @@ func NewConsumer(url string, store *idempotency.Store) (*Consumer, error) {
 		return nil, fmt.Errorf("set qos: %w", err)
 	}
 
-	return &Consumer{conn: conn, channel: ch, store: store, retries: make(map[string]int)}, nil
+	return &Consumer{conn: conn, channel: ch, store: store, retries: make(map[string]int), mailer: mailer}, nil
 }
 
 func declareTopology(ch *amqp.Channel) error {
@@ -132,6 +134,15 @@ func (c *Consumer) handle(msg amqp.Delivery) {
 func (c *Consumer) sendNotification(event domain.PaymentEvent) error {
 	amountDollars := float64(event.Amount) / 100.0
 	log.Printf("[Notification] Sent email to %s for Order #%s. Amount: $%.2f", event.CustomerEmail, event.OrderID, amountDollars)
+
+	if c.mailer != nil {
+		subject := fmt.Sprintf("Payment %s for Order #%s", event.Status, event.OrderID)
+		body := fmt.Sprintf("Your payment of $%.2f for order #%s has been %s.", amountDollars, event.OrderID, event.Status)
+		if err := c.mailer.Send(event.CustomerEmail, subject, body); err != nil {
+			return fmt.Errorf("send email: %w", err)
+		}
+	}
+
 	return nil
 }
 
