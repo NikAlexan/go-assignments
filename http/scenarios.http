@@ -74,3 +74,47 @@ Content-Type: application/json
   "item_name": "Widget",
   "amount": 5000
 }
+
+### ─────────────────────────────────────────────────────────────
+### Assignment 4: Redis Cache-aside scenario
+### ─────────────────────────────────────────────────────────────
+
+###
+# Step 1 - Create order (copy "id" into @cachedOrderId)
+POST {{orderServiceUrl}}/orders
+Content-Type: application/json
+
+{
+  "customer_id": "cust-cache",
+  "item_name": "Phone",
+  "amount": 30000
+}
+
+###
+@cachedOrderId = REPLACE_WITH_ORDER_ID
+
+###
+# Step 2 - 1st GET: cache miss — fetches from DB, writes key to Redis
+# Verify: redis-cli get "order:<id>" should return JSON
+GET {{orderServiceUrl}}/orders/{{cachedOrderId}}
+
+###
+# Step 3 - 2nd GET: cache hit — served from Redis, no DB query
+GET {{orderServiceUrl}}/orders/{{cachedOrderId}}
+
+### ─────────────────────────────────────────────────────────────
+### Assignment 4: Simulated provider + retry scenario
+### Set PROVIDER_MODE=SIMULATED in .env and restart notification-service
+### Then watch logs: docker compose logs -f notification-service
+### ─────────────────────────────────────────────────────────────
+
+###
+# Trigger a payment event — notification-service will retry with backoff on simulated failures
+POST {{orderServiceUrl}}/orders
+Content-Type: application/json
+
+{
+  "customer_id": "cust-retry",
+  "item_name": "Keyboard",
+  "amount": 7500
+}

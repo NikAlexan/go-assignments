@@ -9,7 +9,7 @@ Content-Type: application/json
 {
   "customer_id": "cust-1",
   "item_name": "Laptop",
-  "amount": 1005000
+  "amount": 50000
 }
 
 ###
@@ -47,26 +47,36 @@ Content-Type: application/json
 }
 
 ###
-# Get order by ID
-GET {{baseUrl}}/orders/REPLACE_WITH_ORDER_ID
+# Set the order ID from the response above
+@orderId = REPLACE_WITH_ORDER_ID
+
+###
+# Get order by ID (1st call — cache miss, writes to Redis)
+GET {{baseUrl}}/orders/{{orderId}}
+
+###
+# Get order by ID (2nd call — cache hit from Redis)
+GET {{baseUrl}}/orders/{{orderId}}
 
 ###
 # Get order - not found
 GET {{baseUrl}}/orders/00000000-0000-0000-0000-000000000000
 
 ###
-# Cancel a Pending order
-PATCH {{baseUrl}}/orders/REPLACE_WITH_PENDING_ORDER_ID/cancel
+# Cancel a Paid order - should return 409 Conflict (cache NOT invalidated)
+PATCH {{baseUrl}}/orders/{{orderId}}/cancel
 
 ###
-# Cancel a Paid order - should return 409 Conflict
-PATCH {{baseUrl}}/orders/REPLACE_WITH_PAID_ORDER_ID/cancel
-
-###
-@status =
+@status = Paid
 # Get orders by status
 GET {{baseUrl}}/orders?status={{status}}
 
 ###
 # Get payment stats (via Order Service → Payment Service gRPC)
 GET {{baseUrl}}/payments/stats
+
+### ─────────────────────────────────────────────────────────────
+### Rate Limiter: 10 req/min per IP — 11th returns 429
+### Test via curl:
+###   for i in $(seq 1 11); do curl -s -o /dev/null -w "Request $i: %{http_code}\n" http://localhost:8080/orders/{{orderId}}; done
+### ─────────────────────────────────────────────────────────────
