@@ -15,10 +15,12 @@ var ErrPaymentUnavailable = errors.New("payment service unavailable")
 type OrderUseCase struct {
 	repository    OrderRepository
 	paymentClient PaymentClient
+	cache         OrderCache
+	cacheTTL      time.Duration
 }
 
-func NewOrderUseCase(repository OrderRepository, paymentClient PaymentClient) *OrderUseCase {
-	return &OrderUseCase{repository: repository, paymentClient: paymentClient}
+func NewOrderUseCase(repository OrderRepository, paymentClient PaymentClient, cache OrderCache, cacheTTL time.Duration) *OrderUseCase {
+	return &OrderUseCase{repository: repository, paymentClient: paymentClient, cache: cache, cacheTTL: cacheTTL}
 }
 
 type CreateOrderInput struct {
@@ -78,11 +80,26 @@ func (useCase *OrderUseCase) CreateOrder(ctx context.Context, input CreateOrderI
 		return nil, err
 	}
 	order.Status = newStatus
+	if useCase.cache != nil {
+		_ = useCase.cache.Delete(ctx, order.ID)
+	}
 	return order, nil
 }
 
 func (useCase *OrderUseCase) GetOrder(ctx context.Context, id string) (*domain.Order, error) {
-	return useCase.repository.FindByID(ctx, id)
+	if useCase.cache != nil {
+		if cached, err := useCase.cache.Get(ctx, id); err == nil && cached != nil {
+			return cached, nil
+		}
+	}
+	order, err := useCase.repository.FindByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if useCase.cache != nil {
+		_ = useCase.cache.Set(ctx, order, useCase.cacheTTL)
+	}
+	return order, nil
 }
 
 func (useCase *OrderUseCase) GetOrdersByStatus(ctx context.Context, status string) ([]*domain.Order, error) {
@@ -107,5 +124,8 @@ func (useCase *OrderUseCase) CancelOrder(ctx context.Context, id string) (*domai
 		return nil, err
 	}
 	order.Status = "Cancelled"
+	if useCase.cache != nil {
+		_ = useCase.cache.Delete(ctx, id)
+	}
 	return order, nil
 }

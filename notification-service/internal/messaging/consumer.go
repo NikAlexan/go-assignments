@@ -1,12 +1,14 @@
 package messaging
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"notification-service/internal/domain"
-	"notification-service/internal/email"
 	"notification-service/internal/idempotency"
+	"notification-service/internal/notifier"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -16,18 +18,19 @@ const (
 	dlxName     = "payment.dlx"
 	dlqName     = "payment.completed.dlq"
 	dlqRouteKey = "dead"
-	maxRetries  = 3
 )
 
 type Consumer struct {
-	conn    *amqp.Connection
-	channel *amqp.Channel
-	store   *idempotency.Store
-	retries map[string]int
-	mailer  *email.Sender
+	conn          *amqp.Connection
+	channel       *amqp.Channel
+	store         idempotency.Store
+	retries       map[string]int
+	sender        notifier.EmailSender
+	maxRetries    int
+	baseDelayMs   int
 }
 
-func NewConsumer(url string, store *idempotency.Store, mailer *email.Sender) (*Consumer, error) {
+func NewConsumer(url string, store idempotency.Store, sender notifier.EmailSender, maxRetries, baseDelayMs int) (*Consumer, error) {
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("dial rabbitmq: %w", err)
@@ -52,7 +55,15 @@ func NewConsumer(url string, store *idempotency.Store, mailer *email.Sender) (*C
 		return nil, fmt.Errorf("set qos: %w", err)
 	}
 
-	return &Consumer{conn: conn, channel: ch, store: store, retries: make(map[string]int), mailer: mailer}, nil
+	return &Consumer{
+		conn:        conn,
+		channel:     ch,
+		store:       store,
+		retries:     make(map[string]int),
+		sender:      sender,
+		maxRetries:  maxRetries,
+		baseDelayMs: baseDelayMs,
+	}, nil
 }
 
 func declareTopology(ch *amqp.Channel) error {
@@ -100,6 +111,8 @@ func (c *Consumer) Start(done <-chan struct{}) error {
 }
 
 func (c *Consumer) handle(msg amqp.Delivery) {
+	ctx := context.Background()
+
 	var event domain.PaymentEvent
 	if err := json.Unmarshal(msg.Body, &event); err != nil {
 		log.Printf("[Notification] failed to unmarshal message: %v — sending to DLQ", err)
@@ -107,38 +120,52 @@ func (c *Consumer) handle(msg amqp.Delivery) {
 		return
 	}
 
-	if c.store.Seen(event.EventID) {
+	seen, err := c.store.Seen(ctx, event.EventID)
+	if err != nil {
+		log.Printf("[Notification] idempotency check failed for event %s: %v — requeueing", event.EventID, err)
+		msg.Nack(false, true)
+		return
+	}
+	if seen {
 		log.Printf("[Notification] duplicate event %s — skipping", event.EventID)
 		msg.Ack(false)
 		return
 	}
 
-	if err := c.sendNotification(event); err != nil {
-		c.retries[event.EventID]++
-		if c.retries[event.EventID] >= maxRetries {
-			log.Printf("[DLQ] Message for Order #%s moved to dead letter queue after %d retries", event.OrderID, maxRetries)
+	if err := c.sendNotification(ctx, event); err != nil {
+		attempt := c.retries[event.EventID] + 1
+		c.retries[event.EventID] = attempt
+
+		if attempt >= c.maxRetries {
+			log.Printf("[DLQ] Message for Order #%s moved to dead letter queue after %d retries", event.OrderID, c.maxRetries)
 			delete(c.retries, event.EventID)
 			msg.Nack(false, false)
 		} else {
-			log.Printf("[Notification] error processing event %s (attempt %d): %v — requeueing", event.EventID, c.retries[event.EventID], err)
+			// Exponential backoff: baseDelay * 2^(attempt-1)
+			delay := time.Duration(c.baseDelayMs) * time.Millisecond * (1 << (attempt - 1))
+			log.Printf("[Notification] error processing event %s (attempt %d/%d): %v — retrying in %s",
+				event.EventID, attempt, c.maxRetries, err, delay)
+			time.Sleep(delay)
 			msg.Nack(false, true)
 		}
 		return
 	}
 
-	c.store.Mark(event.EventID)
+	if err := c.store.Mark(ctx, event.EventID); err != nil {
+		log.Printf("[Notification] failed to mark event %s as processed: %v", event.EventID, err)
+	}
 	delete(c.retries, event.EventID)
 	msg.Ack(false)
 }
 
-func (c *Consumer) sendNotification(event domain.PaymentEvent) error {
+func (c *Consumer) sendNotification(ctx context.Context, event domain.PaymentEvent) error {
 	amountDollars := float64(event.Amount) / 100.0
-	log.Printf("[Notification] Sent email to %s for Order #%s. Amount: $%.2f", event.CustomerEmail, event.OrderID, amountDollars)
+	log.Printf("[Notification] Sending email to %s for Order #%s. Amount: $%.2f", event.CustomerEmail, event.OrderID, amountDollars)
 
-	if c.mailer != nil {
+	if c.sender != nil {
 		subject := fmt.Sprintf("Payment %s for Order #%s", event.Status, event.OrderID)
 		body := fmt.Sprintf("Your payment of $%.2f for order #%s has been %s.", amountDollars, event.OrderID, event.Status)
-		if err := c.mailer.Send(event.CustomerEmail, subject, body); err != nil {
+		if err := c.sender.Send(ctx, event.CustomerEmail, subject, body); err != nil {
 			return fmt.Errorf("send email: %w", err)
 		}
 	}

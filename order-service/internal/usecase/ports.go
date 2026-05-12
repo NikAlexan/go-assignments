@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"order-service/internal/domain"
+	"time"
 )
 
 type OrderRepository interface {
@@ -11,6 +12,12 @@ type OrderRepository interface {
 	FindByIdempotencyKey(ctx context.Context, key string) (*domain.Order, error)
 	UpdateStatus(ctx context.Context, id, status string) error
 	FindByStatus(ctx context.Context, status string) ([]*domain.Order, error)
+}
+
+type OrderCache interface {
+	Get(ctx context.Context, id string) (*domain.Order, error)
+	Set(ctx context.Context, order *domain.Order, ttl time.Duration) error
+	Delete(ctx context.Context, id string) error
 }
 
 type PaymentStats struct {

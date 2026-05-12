@@ -1,6 +1,7 @@
 package email
 
 import (
+	"context"
 	"fmt"
 	"net/smtp"
 )
@@ -20,7 +21,7 @@ func NewSender(from, password string) *Sender {
 	return &Sender{from: from, password: password, host: "smtp.gmail.com", port: "587"}
 }
 
-func (s *Sender) Send(to, subject, body string) error {
+func (s *Sender) Send(_ context.Context, to, subject, body string) error {
 	auth := smtp.PlainAuth("", s.from, s.password, s.host)
 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%s", s.from, to, subject, body)
 	return smtp.SendMail(s.host+":"+s.port, auth, s.from, []string{to}, []byte(msg))

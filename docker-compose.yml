@@ -1,4 +1,14 @@
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   orders-db:
     image: postgres:18-alpine
     environment:
@@ -65,8 +75,14 @@ services:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       SMTP_FROM: ${SMTP_FROM}
       SMTP_PASSWORD: ${SMTP_PASSWORD}
+      REDIS_ADDR: redis:6379
+      PROVIDER_MODE: ${PROVIDER_MODE:-REAL}
+      RETRY_MAX: ${RETRY_MAX:-3}
+      RETRY_BASE_DELAY_MS: ${RETRY_BASE_DELAY_MS:-2000}
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   order-service:
@@ -76,6 +92,9 @@ services:
       PAYMENT_GRPC_ADDR: payment-service:${PAYMENT_GRPC_PORT}
       PORT: ${ORDER_SERVICE_PORT}
       ORDER_GRPC_PORT: ${ORDER_GRPC_PORT}
+      REDIS_ADDR: redis:6379
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-300}
+      RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-10}
     ports:
       - "${ORDER_SERVICE_PORT}:${ORDER_SERVICE_PORT}"
       - "${ORDER_GRPC_PORT}:${ORDER_GRPC_PORT}"
@@ -84,3 +103,5 @@ services:
         condition: service_healthy
       payment-service:
         condition: service_started
+      redis:
+        condition: service_healthy

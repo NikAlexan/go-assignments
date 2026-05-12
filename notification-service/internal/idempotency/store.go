@@ -1,24 +1,8 @@
 package idempotency
 
-import "sync"
+import "context"
 
-type Store struct {
-	mu   sync.RWMutex
-	seen map[string]bool
-}
-
-func NewStore() *Store {
-	return &Store{seen: make(map[string]bool)}
-}
-
-func (s *Store) Seen(id string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.seen[id]
-}
-
-func (s *Store) Mark(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.seen[id] = true
+type Store interface {
+	Seen(ctx context.Context, id string) (bool, error)
+	Mark(ctx context.Context, id string) error
 }

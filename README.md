@@ -1,4 +1,4 @@
-# AP2 Assignment 3 - Event-Driven Architecture (Order, Payment & Notification Microservices)
+# AP2 Assignment 4 - Performance Optimization & External Integrations
 
 **Student:** Nikita Vassilenko, SE-2410
 
@@ -256,3 +256,145 @@ Available at `http://localhost:15672` (guest / guest) when running via Docker Co
 | Order Service | 8080 | 50052 | |
 | Payment Service | 8081 | 50051 | |
 | RabbitMQ | — | — | AMQP: 5672, UI: 15672 |
+
+---
+
+## Assignment 4: Performance Optimization & External Integrations
+
+### What changed
+
+| # | Change |
+|---|--------|
+| 1 | **Redis Cache-aside** added to Order Service for `GET /orders/:id` |
+| 2 | **Cache invalidation** on order status update and cancellation |
+| 3 | **Adapter Pattern** — `EmailSender` interface replaces direct SMTP coupling |
+| 4 | **SimulatedSender** — mock provider with random failures for testing retry logic |
+| 5 | **Redis Idempotency** — in-memory `sync.Map` replaced with Redis `SetNX` (survives restarts) |
+| 6 | **Exponential Backoff** — notification retries: 2s → 4s → 8s |
+| 7 | **Rate Limiter middleware** — Redis-backed, 10 req/min per IP (HTTP 429 on exceeded) |
+| 8 | **Redis container** added to Docker Compose |
+
+### Cache-aside Flow (Order Service)
+
+```
+GET /orders/:id
+       │
+       ▼
+  cache.Get(id)  ──hit──▶  return cached order  (no DB query)
+       │
+     miss
+       │
+       ▼
+  repo.FindByID(id)
+       │
+       ▼
+  cache.Set(order, TTL=5min)
+       │
+       ▼
+  return order
+```
+
+**Invalidation:** after `UpdateStatus` or `CancelOrder`, `cache.Delete(id)` is called atomically so the next read fetches fresh data from PostgreSQL.
+
+### Cache Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REDIS_ADDR` | `redis:6379` | Redis address |
+| `CACHE_TTL_SECONDS` | `300` | Order cache TTL (5 min) |
+
+### Adapter Pattern — Email Provider
+
+The Notification Service uses the `notifier.EmailSender` interface:
+
+```go
+type EmailSender interface {
+    Send(ctx context.Context, to, subject, body string) error
+}
+```
+
+Select the implementation via `PROVIDER_MODE` env variable:
+
+| `PROVIDER_MODE` | Behaviour |
+|-----------------|-----------|
+| `REAL` (default) | Sends real email via Gmail SMTP |
+| `SIMULATED` | Logs the email, adds 100–500ms latency, fails ~30% of the time |
+
+### Retry & Exponential Backoff
+
+When `sender.Send()` returns an error, the worker retries with increasing delays:
+
+```
+Attempt 1 failed → wait 2s  → Nack + requeue
+Attempt 2 failed → wait 4s  → Nack + requeue
+Attempt 3 failed → wait 8s  → Nack + DLQ (no requeue)
+```
+
+Formula: `delay = RETRY_BASE_DELAY_MS × 2^(attempt−1)`
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RETRY_MAX` | `3` | Maximum retry attempts |
+| `RETRY_BASE_DELAY_MS` | `2000` | Base delay in ms |
+
+### Redis Idempotency (Notification Service)
+
+Before processing a message, the worker checks:
+```
+EXISTS idempotency:notification:{event_id}
+```
+After successful send:
+```
+SET idempotency:notification:{event_id} "processed" EX 86400
+```
+This prevents duplicate emails even after a service restart (unlike the previous `sync.Map`).
+
+### Rate Limiter (Bonus — Order Service)
+
+Redis-backed sliding window counter per client IP:
+- Key: `rate:{ip}` — incremented with `INCR`, TTL reset to 60s on first request
+- Limit: `RATE_LIMIT_RPM` requests per minute (default: 10)
+- Returns `HTTP 429 Too Many Requests` on exceed
+
+### Updated Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                   Client (curl / Postman)                 │
+└──────────────────────────┬───────────────────────────────┘
+                           │ HTTP REST
+                           ▼
+┌──────────────────────────────────────────────────────────┐
+│          Order Service  :8080 (HTTP) | :50052 (gRPC)     │
+│                                                          │
+│  RateLimiter middleware (Redis)                          │
+│  GET /orders/:id  →  Redis cache  →  PostgreSQL          │
+│  PATCH /cancel    →  PostgreSQL   →  cache.Delete        │
+└──────────────────────────┬───────────────────────────────┘
+                           │ gRPC
+                           ▼
+┌──────────────────────────────────────────────────────────┐
+│         Payment Service  :8081 (HTTP) | :50051 (gRPC)    │
+│                    ↓ publish event                       │
+└──────────────────────────┬───────────────────────────────┘
+                           │ AMQP
+                           ▼
+                  ┌──────────────────┐
+                  │    RabbitMQ      │
+                  └────────┬─────────┘
+                           │
+              ┌────────────┴──────────────────┐
+              ▼                               ▼
+  ┌───────────────────────────┐   ┌──────────────────────┐
+  │   Notification Service    │   │  DLQ (after retries) │
+  │                           │   └──────────────────────┘
+  │  Redis idempotency check  │
+  │  EmailSender (REAL/SIM)   │
+  │  Exponential backoff      │
+  └───────────────────────────┘
+              │
+              ▼
+      ┌───────────────┐
+      │     Redis     │  ← shared by Order cache + Notification idempotency + Rate limiter
+      └───────────────┘
+```

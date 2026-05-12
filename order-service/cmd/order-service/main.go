@@ -5,9 +5,12 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
+	"time"
 
 	_ "github.com/lib/pq"
 	pb "github.com/nikalexan/go-proto-gen/order"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 
 	"order-service/internal/repository"
@@ -42,6 +45,24 @@ func main() {
 		log.Fatalf("ping db: %v", err)
 	}
 
+	// Redis client
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+
+	cacheTTLSec, _ := strconv.Atoi(os.Getenv("CACHE_TTL_SECONDS"))
+	if cacheTTLSec <= 0 {
+		cacheTTLSec = 300
+	}
+	cacheTTL := time.Duration(cacheTTLSec) * time.Second
+
+	rateLimitRPM, _ := strconv.Atoi(os.Getenv("RATE_LIMIT_RPM"))
+	if rateLimitRPM <= 0 {
+		rateLimitRPM = 10
+	}
+
 	// Composition Root
 	paymentClient, err := repository.NewPaymentGRPCClient(paymentGRPCAddr)
 	if err != nil {
@@ -49,7 +70,8 @@ func main() {
 	}
 
 	orderRepository := repository.NewPostgresOrderRepo(database)
-	orderUseCase := usecase.NewOrderUseCase(orderRepository, paymentClient)
+	orderCache := repository.NewRedisOrderCache(rdb)
+	orderUseCase := usecase.NewOrderUseCase(orderRepository, paymentClient, orderCache, cacheTTL)
 
 	// gRPC Server (Order streaming)
 	go func() {
@@ -67,7 +89,7 @@ func main() {
 
 	// HTTP Server (REST — external API)
 	handler := transporthttp.NewHandler(orderUseCase)
-	router := transporthttp.SetupRouter(handler)
+	router := transporthttp.SetupRouter(handler, rdb, rateLimitRPM)
 
 	port := os.Getenv("PORT")
 	if port == "" {
