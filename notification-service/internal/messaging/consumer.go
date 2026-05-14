@@ -8,6 +8,7 @@ import (
 	"notification-service/internal/domain"
 	"notification-service/internal/idempotency"
 	"notification-service/internal/notifier"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -21,13 +22,14 @@ const (
 )
 
 type Consumer struct {
-	conn          *amqp.Connection
-	channel       *amqp.Channel
-	store         idempotency.Store
-	retries       map[string]int
-	sender        notifier.EmailSender
-	maxRetries    int
-	baseDelayMs   int
+	conn        *amqp.Connection
+	channel     *amqp.Channel
+	store       idempotency.Store
+	retriesMu   sync.Mutex
+	retries     map[string]int
+	sender      notifier.EmailSender
+	maxRetries  int
+	baseDelayMs int
 }
 
 func NewConsumer(url string, store idempotency.Store, sender notifier.EmailSender, maxRetries, baseDelayMs int) (*Consumer, error) {
@@ -48,8 +50,8 @@ func NewConsumer(url string, store idempotency.Store, sender notifier.EmailSende
 		return nil, err
 	}
 
-	// prefetch 1 so we process one message at a time
-	if err := ch.Qos(1, 0, false); err != nil {
+	// prefetch per-goroutine: allow multiple messages in-flight
+	if err := ch.Qos(10, 0, false); err != nil {
 		ch.Close()
 		conn.Close()
 		return nil, fmt.Errorf("set qos: %w", err)
@@ -105,7 +107,7 @@ func (c *Consumer) Start(done <-chan struct{}) error {
 			if !ok {
 				return nil
 			}
-			c.handle(msg)
+			go c.handle(msg)
 		}
 	}
 }
@@ -133,12 +135,16 @@ func (c *Consumer) handle(msg amqp.Delivery) {
 	}
 
 	if err := c.sendNotification(ctx, event); err != nil {
+		c.retriesMu.Lock()
 		attempt := c.retries[event.EventID] + 1
 		c.retries[event.EventID] = attempt
+		c.retriesMu.Unlock()
 
 		if attempt >= c.maxRetries {
 			log.Printf("[DLQ] Message for Order #%s moved to dead letter queue after %d retries", event.OrderID, c.maxRetries)
+			c.retriesMu.Lock()
 			delete(c.retries, event.EventID)
+			c.retriesMu.Unlock()
 			msg.Nack(false, false)
 		} else {
 			// Exponential backoff: baseDelay * 2^(attempt-1)
@@ -154,7 +160,9 @@ func (c *Consumer) handle(msg amqp.Delivery) {
 	if err := c.store.Mark(ctx, event.EventID); err != nil {
 		log.Printf("[Notification] failed to mark event %s as processed: %v", event.EventID, err)
 	}
+	c.retriesMu.Lock()
 	delete(c.retries, event.EventID)
+	c.retriesMu.Unlock()
 	msg.Ack(false)
 }
 
