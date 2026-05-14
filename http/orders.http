@@ -7,7 +7,7 @@ POST {{baseUrl}}/orders
 Content-Type: application/json
 
 {
-  "customer_id": "cust-1",
+  "customer_id": "cust-3",
   "item_name": "Laptop",
   "amount": 50000
 }

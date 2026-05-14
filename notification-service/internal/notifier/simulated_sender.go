@@ -21,8 +21,8 @@ func (s *SimulatedSender) Send(_ context.Context, to, subject, body string) erro
 	latency := time.Duration(100+rand.Intn(400)) * time.Millisecond
 	time.Sleep(latency)
 
-	// Simulate ~30% failure rate
-	if rand.Float32() < 0.30 {
+	// Simulate ~80% failure rate (20% success)
+	if rand.Float32() < 0.80 {
 		return errors.New("simulated: provider temporarily unavailable")
 	}
 
